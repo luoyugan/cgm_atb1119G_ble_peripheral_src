@@ -52,6 +52,7 @@ static void ble_cgms_evt_handle(nrf_ble_cgms_t * p_cgms, nrf_ble_cgms_evt_t *evt
 		break;
 	case BLE_CGMS_EVT_STOP_SESSION:
 		printk("CGMS stop session\n");
+		cgms_stop_session();
 		break;
 	case BLE_CGMS_EVT_WRITE_COMM_INTERVAL:
 		printk("CGMS comm interval -> %u min\n", m_comm_interval);

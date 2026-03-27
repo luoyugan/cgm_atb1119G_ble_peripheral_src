@@ -69,21 +69,6 @@ static int cgms_socp_indicate(const uint8_t *data, uint16_t len)
 	return bt_gatt_indicate(m_conn, &m_socp_ind_params);
 }
 
-// static void cgms_socp_decode(const uint8_t *buf, uint16_t len, ble_cgms_socp_value_t *req)
-// {
-// 	req->opcode = 0xFFU;
-// 	req->operand_len = 0U;
-// 	req->p_operand = NULL;
-
-// 	if (len > 0U) {
-// 		req->opcode = buf[0];
-// 	}
-// 	if (len > 1U) {
-// 		req->operand_len = len - 1U;
-// 		req->p_operand = (uint8_t *)&buf[1];
-// 	}
-// }
-
 static void ble_socp_decode(uint8_t data_len, uint8_t const * p_data, ble_cgms_socp_value_t * p_socp_val)
 {
     p_socp_val->opcode      = 0xFF;
@@ -153,13 +138,9 @@ static int cgms_socp_send_response(ble_socp_rsp_t rsp)
 	return cgms_socp_indicate(m_socp_ind_buf, len);
 }
 
-static int cgms_socp_send_u16_response(uint8_t opcode, uint16_t value)
+static bool is_feature_present(uint32_t feature)
 {
-	uint8_t resp[2];
-
-	put_le16(resp, value);
-	// return cgms_socp_send_response(p_cgms, opcode, 0U, SOCP_RSP_SUCCESS, resp, sizeof(resp));
-	return 0;
+    return (m_feature.feature & feature);
 }
 
 ssize_t cgms_write_socp(struct bt_conn *conn, const struct bt_gatt_attr *attr,
@@ -197,10 +178,13 @@ ssize_t cgms_write_socp(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 	switch (socp_request.opcode) {
 		// 写通信间隔
 		case SOCP_WRITE_CGM_COMMUNICATION_INTERVAL:
+			// 新增间隔设置检查 
 			if (socp_request.operand_len < 1U) {
 				rsp.rsp_code = SOCP_RSP_INVALID_OPERAND;
 				break;
 			}
+			rsp.rsp_code = SOCP_RSP_SUCCESS;
+			m_comm_interval = socp_request.p_operand[0];
 			// 处理通信间隔参数事件
 			cgms_emit_event(BLE_CGMS_EVT_WRITE_COMM_INTERVAL);
 			break;
@@ -216,8 +200,9 @@ ssize_t cgms_write_socp(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 			if (m_session_started) {
 				rsp.rsp_code = SOCP_RSP_PROCEDURE_NOT_COMPLETED;
 			}
+			// 更新feature
 			else if ((m_nb_run_session != 0U) && 
-					!cgms_feature_present(NRF_BLE_CGMS_FEAT_MULTIPLE_SESSIONS_SUPPORTED))
+					!is_feature_present(NRF_BLE_CGMS_FEAT_MULTIPLE_SESSIONS_SUPPORTED))
 			{
 				rsp.rsp_code = SOCP_RSP_PROCEDURE_NOT_COMPLETED;
 			}
@@ -235,7 +220,7 @@ ssize_t cgms_write_socp(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 				err_code = cgms_sst_set(&sst);
 				if (err_code != NRF_SUCCESS) {
 					rsp.rsp_code = SOCP_RSP_PROCEDURE_NOT_COMPLETED;
-					printk("Failed to set SST (err %d)\n", err_code);
+					LOG_ERR("Failed to set SST (err %d)\n", err_code);
 					return len;
 				}
 				m_status.time_offset    = 0;
@@ -245,7 +230,7 @@ ssize_t cgms_write_socp(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 				if (err_code != NRF_SUCCESS)
 				{
 					rsp.rsp_code = SOCP_RSP_PROCEDURE_NOT_COMPLETED;
-					printk("Failed to update status (err %d)\n", err_code);
+					LOG_ERR("Failed to update status (err %d)\n", err_code);
 					return len;
 				}
 			}
@@ -265,17 +250,17 @@ ssize_t cgms_write_socp(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 				// 发出停止会话事件
 				cgms_emit_event(BLE_CGMS_EVT_STOP_SESSION);
 
-
 				err_code = nrf_ble_cgms_update_status(&status);
 				if (err_code != 0)
 				{
 					rsp.rsp_code = SOCP_RSP_PROCEDURE_NOT_COMPLETED;
-					printk("Failed to update status (err %d)\n", err_code);
+					LOG_ERR("Failed to update status (err %d)\n", err_code);
 					return len;
 				}
 				break;
 			}
 		default:
+			rsp.rsp_code = SOCP_RSP_OP_CODE_NOT_SUPPORTED;
 			break;
 		}
 	(void)cgms_socp_send_response(rsp);

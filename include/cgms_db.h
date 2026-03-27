@@ -15,7 +15,6 @@ uint8_t cgms_encode_sst(uint8_t *buf);
 
 void put_le16(uint8_t *dst, uint16_t value);
 uint16_t get_le16(const uint8_t *src);
-bool cgms_feature_present(uint32_t feature);
 void cgms_racp_reset_state(void);
 uint8_t cgms_normalize_comm_interval(uint8_t interval);
 // int cgms_record_index_offset_less_or_equal_get(uint16_t offset, uint16_t *record_num);

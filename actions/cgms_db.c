@@ -135,11 +135,6 @@ uint16_t get_le16(const uint8_t *src)
 	return (uint16_t)src[0] | ((uint16_t)src[1] << 8);
 }
 
-bool cgms_feature_present(uint32_t feature)
-{
-	return ((m_feature.feature & feature) != 0U);
-}
-
 void cgms_racp_reset_state(void)
 {
 	memset(&m_racp, 0, sizeof(m_racp));

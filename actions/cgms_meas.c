@@ -120,7 +120,7 @@ void cgms_start_session(void)
 	m_current_offset = 0U;
 	m_status.status.status &= (uint8_t)(~NRF_BLE_CGMS_STATUS_SESSION_STOPPED);
 	memset(&m_sst, 0, sizeof(m_sst));
-	cgms_emit_event(BLE_CGMS_EVT_START_SESSION);
+	// cgms_emit_event(BLE_CGMS_EVT_START_SESSION);
 	cgms_cancel_glucose_work();
 	cgms_schedule_glucose_work();
 }
@@ -130,7 +130,7 @@ void cgms_stop_session(void)
 	m_session_started = false;
 	m_status.status.status |= NRF_BLE_CGMS_STATUS_SESSION_STOPPED;
 	cgms_cancel_glucose_work();
-	cgms_emit_event(BLE_CGMS_EVT_STOP_SESSION);
+	// cgms_emit_event(BLE_CGMS_EVT_STOP_SESSION);
 }
 
 void cgms_meas_work_handler(struct k_work *work)
