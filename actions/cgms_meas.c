@@ -7,8 +7,7 @@
 static struct bt_gatt_notify_params m_meas_notify_params;
 static uint8_t m_meas_notify_buf[16];
 
-static uint8_t cgms_meas_encode(nrf_ble_cgms_t            * p_cgms,
-                                const nrf_ble_cgms_meas_t * p_meas,
+static uint8_t cgms_meas_encode(const nrf_ble_cgms_meas_t * p_meas,
                                 uint8_t                   * p_encoded_buffer)
 {
     uint8_t len = 2;
@@ -40,7 +39,7 @@ static uint8_t cgms_meas_encode(nrf_ble_cgms_t            * p_cgms,
     }
 
     // Trend field
-    if (p_cgms->feature.feature & NRF_BLE_CGMS_FEAT_CGM_TREND_INFORMATION_SUPPORTED)
+    if (m_feature.feature & NRF_BLE_CGMS_FEAT_CGM_TREND_INFORMATION_SUPPORTED)
     {
         if (flags & NRF_BLE_CGMS_FLAG_TREND_INFO_PRESENT)
         {
@@ -49,7 +48,7 @@ static uint8_t cgms_meas_encode(nrf_ble_cgms_t            * p_cgms,
     }
 
     // Quality field
-    if (p_cgms->feature.feature & NRF_BLE_CGMS_FEAT_CGM_QUALITY_SUPPORTED)
+    if (m_feature.feature & NRF_BLE_CGMS_FEAT_CGM_QUALITY_SUPPORTED)
     {
         if (flags & NRF_BLE_CGMS_FLAGS_QUALITY_PRESENT)
         {
@@ -71,27 +70,58 @@ void cgms_meas_ccc_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value)
 			BLE_CGMS_EVT_NOTIFICATION_DISABLED);
 }
 
-int cgms_measurement_notify(const ble_cgms_rec_t *rec)
+int cgms_measurement_notify(const ble_cgms_rec_t *p_rec, uint8_t * p_count)
 {
+	uint8_t local_count = 1U;
+
 	printk("CGMS Measurement notify called\n");
-	return cgms_measurement_notify_with_cb(rec, NULL, NULL);
+	if (p_count == NULL) {
+		p_count = &local_count;
+	}
+	return cgms_measurement_notify_with_cb(p_rec, p_count, NULL, NULL);
 }
 
-int cgms_measurement_notify_with_cb(const ble_cgms_rec_t *rec,
+int cgms_measurement_notify_with_cb(const ble_cgms_rec_t *p_rec, uint8_t * p_count, 
 	bt_gatt_complete_func_t func,
 	void *user_data)
 {
-	uint8_t len;
+	uint8_t                encoded_meas[NRF_BLE_CGMS_MEAS_LEN_MAX + NRF_BLE_CGMS_MEAS_REC_LEN_MAX];
+	uint16_t               len     = 0;
+	uint16_t               hvx_len = NRF_BLE_CGMS_MEAS_LEN_MAX;
+	uint8_t                local_count = 1U;
+	int                    i;
+	struct bt_gatt_notify_params m_meas_notify_params;
 
-	if ((m_conn == NULL) || !m_meas_notify_enabled) {
+	// notify 之前先检查连接和通知使能状态
+	if ((p_rec == NULL) || (m_conn == NULL) || !m_meas_notify_enabled) {
 		return -ENOTCONN;
 	}
 
-	// len = cgms_meas_encode(m_cgms, &rec->meas, m_meas_notify_buf);
+	if (p_count == NULL) {
+		p_count = &local_count;
+	}
+
+	if (*p_count == 0U) {
+		return -EINVAL;
+	}
+
+	for (i = 0; i < *p_count; i++)
+	{
+		uint8_t meas_len = cgms_meas_encode(&(p_rec[i].meas), (encoded_meas + len));
+		if (len + meas_len >= NRF_BLE_CGMS_MEAS_LEN_MAX)
+        {
+            break;
+        }
+        len += meas_len;
+	}
+	*p_count = i;
+    hvx_len  = len;
+
 	memset(&m_meas_notify_params, 0, sizeof(m_meas_notify_params));
-	m_meas_notify_params.attr = &attr_cgms_svc[CGMS_ATTR_MEAS_VAL];
-	m_meas_notify_params.data = m_meas_notify_buf;
-	m_meas_notify_params.len = len;
+
+	//m_meas_notify_params.attr = &attr_cgms_svc[CGMS_ATTR_MEAS_VAL];
+	m_meas_notify_params.data = encoded_meas;
+	m_meas_notify_params.len = hvx_len;
 	m_meas_notify_params.func = func;
 	m_meas_notify_params.user_data = user_data;
 
@@ -137,6 +167,7 @@ void cgms_meas_work_handler(struct k_work *work)
 {
 	ble_cgms_rec_t rec;
 	int32_t err_code = 0;
+	uint8_t rec_count = 1U;
 
 	ARG_UNUSED(work);
 	if (!m_session_started) {
@@ -163,6 +194,6 @@ void cgms_meas_work_handler(struct k_work *work)
 		// 记录添加失败，可能是数据库已满。此处仅打印错误日志，实际应用中可根据需求进行处理。
 		printk("Failed to add CGMS record to database (err: %d)\n", err_code);
 	}
-	(void)cgms_measurement_notify(&rec);
+	(void)cgms_measurement_notify(&rec, &rec_count);
 	cgms_schedule_glucose_work();
 }

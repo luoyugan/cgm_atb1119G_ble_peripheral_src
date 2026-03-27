@@ -8,7 +8,10 @@
 #include "cgms_meas.h"
 #include "cgms_sst.h"
 
+#ifndef CGMS_ACTIONS_LOG_READY
 LOG_MODULE_REGISTER(cgms_socp, LOG_LEVEL_DBG);
+#define CGMS_ACTIONS_LOG_READY 1
+#endif
 
 void cgms_socp_ccc_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {

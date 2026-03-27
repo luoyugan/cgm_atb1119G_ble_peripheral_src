@@ -1,10 +1,16 @@
 #include <errno.h>
 #include <string.h>
+#include <logging/log.h>
 
 #include "cgms_racp.h"
 #include "cgms_db.h"
 #include "cgms_meas.h"
 #include "atb_ble_cgms.h"
+
+#ifndef CGMS_ACTIONS_LOG_READY
+LOG_MODULE_REGISTER(cgms_racp, LOG_LEVEL_DBG);
+#define CGMS_ACTIONS_LOG_READY 1
+#endif
 
 uint8_t ble_racp_encode(const ble_racp_value_t * p_racp_val, uint8_t * p_data)
 {
@@ -24,6 +30,7 @@ uint8_t ble_racp_encode(const ble_racp_value_t * p_racp_val, uint8_t * p_data)
 
     return len;
 }
+
 void ble_racp_decode(uint8_t data_len, uint8_t const * p_data, ble_racp_value_t * p_racp_val)
 {
     p_racp_val->opcode      = 0xFF;
@@ -55,9 +62,25 @@ void cgms_racp_ccc_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value)
 
 static void cgms_racp_ind_cb(struct bt_conn *conn, struct bt_gatt_indicate_params *params, uint8_t err)
 {
+    LOG_DBG("RACP indication complete: conn %p, params %p, err %u", conn, params, err);
 	ARG_UNUSED(conn);
 	ARG_UNUSED(params);
 	ARG_UNUSED(err);
+}
+
+static int cgms_racp_send_meas_with_cb(nrf_ble_cgms_t * p_cgms, ble_cgms_rec_t * p_rec, uint8_t * p_count)
+{
+    int err = cgms_measurement_notify_with_cb(
+        p_rec,
+        p_count,
+        cgms_racp_on_meas_tx_complete,
+        p_cgms);
+
+    if (err == 0) {
+        p_cgms->racp_data.racp_proc_records_reported += *p_count;
+    }
+
+    return err;
 }
 
 static int cgms_racp_indicate(nrf_ble_cgms_t * p_cgms, ble_racp_value_t * p_racp_val)
@@ -82,23 +105,6 @@ static int cgms_racp_indicate(nrf_ble_cgms_t * p_cgms, ble_racp_value_t * p_racp
 
 static void cgms_send_racp_response_code(nrf_ble_cgms_t * p_cgms,uint8_t req_opcode, uint8_t rsp_code)
 {
-	// uint8_t buf[8];
-	// uint8_t operand[2];
-	// uint8_t len;
-	// ble_racp_value_t rsp;
-
-	// operand[0] = req_opcode;
-	// operand[1] = rsp_code;
-	
-	// rsp.opcode = RACP_OPCODE_RESPONSE_CODE;
-	// rsp.operator = RACP_OPERATOR_NULL;
-	// rsp.operand_len = sizeof(operand);
-	// rsp.p_operand = operand;
-
-	// len = ble_racp_encode(buf, sizeof(buf), &rsp);
-	// if (len == 0U) {
-	// 	return;
-	// }
 	p_cgms->racp_data.pending_racp_response.opcode      = RACP_OPCODE_RESPONSE_CODE;
     p_cgms->racp_data.pending_racp_response.operator    = RACP_OPERATOR_NULL;
     p_cgms->racp_data.pending_racp_response.operand_len = 2;
@@ -119,7 +125,45 @@ static void cgms_send_racp_response_code(nrf_ble_cgms_t * p_cgms,uint8_t req_opc
  */
 static uint32_t racp_report_records_all(nrf_ble_cgms_t * p_cgms)
 {
-	return 0;
+	uint16_t total_records = cgms_db_num_records_get();
+    uint16_t cur_nb_rec;
+    uint8_t  i;
+    uint8_t  nb_rec_to_send;
+
+    if (p_cgms->racp_data.racp_proc_record_ndx >= total_records)
+    {
+        p_cgms->racp_data.racp_procesing_active = false;
+    }
+    else
+    {
+        uint32_t       err_code;
+        ble_cgms_rec_t rec[NRF_BLE_CGMS_MEAS_REC_PER_NOTIF_MAX];
+
+        cur_nb_rec = total_records - p_cgms->racp_data.racp_proc_record_ndx;
+        if (cur_nb_rec > NRF_BLE_CGMS_MEAS_REC_PER_NOTIF_MAX)
+        {
+            cur_nb_rec = NRF_BLE_CGMS_MEAS_REC_PER_NOTIF_MAX;
+        }
+        nb_rec_to_send = (uint8_t)cur_nb_rec;
+
+        for (i = 0; i < cur_nb_rec; i++)
+        {
+            err_code = cgms_db_record_get(p_cgms->racp_data.racp_proc_record_ndx + i, &(rec[i]));
+            if (err_code != 0)
+            {
+                return err_code;
+            }
+        }
+        err_code = cgms_racp_send_meas_with_cb(p_cgms, rec, &nb_rec_to_send);
+        
+        if (err_code != 0)
+        {
+            return err_code;
+        }
+        p_cgms->racp_data.racp_proc_record_ndx += nb_rec_to_send;
+    }
+
+    return 0;
 }
 
 /**@brief Function for responding to the FIRST or the LAST operation.
@@ -130,7 +174,45 @@ static uint32_t racp_report_records_all(nrf_ble_cgms_t * p_cgms)
  */
 static uint32_t racp_report_records_first_last(nrf_ble_cgms_t * p_cgms)
 {
-	return 0;
+	uint32_t       err_code;
+    ble_cgms_rec_t rec;
+    uint16_t       total_records;
+    uint8_t        nb_rec_to_send = 1;
+
+    total_records = cgms_db_num_records_get();
+
+    if ((p_cgms->racp_data.racp_proc_records_reported != 0) || (total_records == 0))
+    {
+        p_cgms->racp_data.racp_procesing_active = false;
+    }
+    else
+    {
+        if (p_cgms->racp_data.racp_proc_operator == RACP_OPERATOR_FIRST)
+        {
+            err_code = cgms_db_record_get(0, &rec);
+            if (err_code != 0)
+            {
+                return err_code;
+            }
+        }
+        else if (p_cgms->racp_data.racp_proc_operator == RACP_OPERATOR_LAST)
+        {
+            err_code = cgms_db_record_get(total_records - 1, &rec);
+            if (err_code != 0)
+            {
+                return err_code;
+            }
+        }
+
+        err_code = cgms_racp_send_meas_with_cb(p_cgms, &rec, &nb_rec_to_send);
+        if (err_code != 0)
+        {
+            return err_code;
+        }
+        p_cgms->racp_data.racp_proc_record_ndx++;
+    }
+
+    return 0;
 }
 
 /**@brief Function for responding to the LESS OR EQUAL operation.
@@ -141,7 +223,50 @@ static uint32_t racp_report_records_first_last(nrf_ble_cgms_t * p_cgms)
  */
 static uint32_t racp_report_records_less_equal(nrf_ble_cgms_t * p_cgms)
 {
-    return 0;
+    uint16_t total_rec_nb_to_send;
+    uint16_t rec_nb_left_to_send;
+    uint8_t  nb_rec_to_send;
+    uint16_t i;
+
+    total_rec_nb_to_send = p_cgms->racp_data.racp_proc_records_ndx_last_to_send +1;
+
+    if (p_cgms->racp_data.racp_proc_record_ndx >= total_rec_nb_to_send)
+    {
+        p_cgms->racp_data.racp_procesing_active = false;
+    }
+    else
+    {
+        int32_t     err_code;
+        ble_cgms_rec_t rec[NRF_BLE_CGMS_MEAS_REC_PER_NOTIF_MAX];
+
+        rec_nb_left_to_send = total_rec_nb_to_send - p_cgms->racp_data.racp_proc_records_reported;
+
+        if (rec_nb_left_to_send > NRF_BLE_CGMS_MEAS_REC_PER_NOTIF_MAX)
+        {
+            nb_rec_to_send = NRF_BLE_CGMS_MEAS_REC_PER_NOTIF_MAX;
+        }
+        else
+        {
+            nb_rec_to_send = (uint8_t)rec_nb_left_to_send;
+        }
+
+        for (i = 0; i < nb_rec_to_send; i++)
+        {
+            err_code = cgms_db_record_get(p_cgms->racp_data.racp_proc_record_ndx + i, &(rec[i]));
+            if (err_code != 0)
+            {
+                return err_code;
+            }
+        }
+        err_code = cgms_racp_send_meas_with_cb(p_cgms, rec, &nb_rec_to_send);
+        if (err_code != 0)
+        {
+            return err_code;
+        }
+        p_cgms->racp_data.racp_proc_record_ndx += nb_rec_to_send;
+    }
+
+   return 0;
 }
 
 /**@brief Function for responding to the GREATER OR EQUAL operation.
@@ -152,7 +277,49 @@ static uint32_t racp_report_records_less_equal(nrf_ble_cgms_t * p_cgms)
  */
 static uint32_t racp_report_records_greater_equal(nrf_ble_cgms_t * p_cgms)
 {
-    return 0;
+    int32_t err_code;
+    uint16_t   total_rec_nb = cgms_db_num_records_get();
+    uint16_t   rec_nb_left_to_send;
+    uint8_t    nb_rec_to_send;
+    uint16_t   i;
+
+
+    total_rec_nb = cgms_db_num_records_get();
+    if (p_cgms->racp_data.racp_proc_record_ndx >= total_rec_nb)
+    {
+        p_cgms->racp_data.racp_procesing_active = false;
+
+        return 0;
+    }
+
+    ble_cgms_rec_t rec[NRF_BLE_CGMS_MEAS_REC_PER_NOTIF_MAX];
+
+    rec_nb_left_to_send = total_rec_nb - p_cgms->racp_data.racp_proc_record_ndx;
+    if (rec_nb_left_to_send > NRF_BLE_CGMS_MEAS_REC_PER_NOTIF_MAX)
+    {
+        nb_rec_to_send = NRF_BLE_CGMS_MEAS_REC_PER_NOTIF_MAX;
+    }
+    else
+    {
+        nb_rec_to_send = (uint8_t)rec_nb_left_to_send;
+    }
+
+    for (i = 0; i < nb_rec_to_send; i++)
+    {
+        err_code = cgms_db_record_get(p_cgms->racp_data.racp_proc_record_ndx + i, &(rec[i]));
+        if (err_code != 0)
+        {
+            return err_code;
+        }
+    }
+    err_code = cgms_racp_send_meas_with_cb(p_cgms, rec, &nb_rec_to_send);
+    if (err_code != 0)
+    {
+        return err_code;
+    }
+    p_cgms->racp_data.racp_proc_record_ndx += nb_rec_to_send;
+
+   return 0;
 }
 
 /**@brief Function for informing that the REPORT RECORDS procedure is completed.
@@ -248,47 +415,6 @@ static void racp_report_records_procedure(nrf_ble_cgms_t * p_cgms)
         }
     }
 }
-
-
-// static void cgms_send_racp_num_records(uint16_t count)
-// {
-// 	uint8_t buf[8];
-// 	uint8_t operand[2];
-// 	uint8_t len;
-// 	ble_racp_value_t rsp;
-
-// 	put_le16(operand, count);
-// 	rsp.opcode = RACP_OPCODE_NUM_RECS_RESPONSE;
-// 	rsp.operator = RACP_OPERATOR_NULL;
-// 	rsp.operand_len = sizeof(operand);
-// 	rsp.p_operand = operand;
-
-// 	len = ble_racp_encode(buf, sizeof(buf), &rsp);
-// 	if (len == 0U) {
-// 		return;
-// 	}
-
-// 	(void)cgms_racp_indicate(p_cgms, &rsp);
-// }
-
-// static void cgms_racp_decode(const uint8_t *buf, uint16_t len, ble_racp_value_t *req)
-// {
-// 	req->opcode = 0xFFU;
-// 	req->operator = 0xFFU;
-// 	req->operand_len = 0U;
-// 	req->p_operand = NULL;
-
-// 	if (len > 0U) {
-// 		req->opcode = buf[0];
-// 	}
-// 	if (len > 1U) {
-// 		req->operator = buf[1];
-// 	}
-// 	if (len > 2U) {
-// 		req->operand_len = len - 2U;
-// 		req->p_operand = (uint8_t *)&buf[2];
-// 	}
-// }
 
 /**@brief Function for testing if the received request is to be executed.
  *
@@ -553,84 +679,19 @@ static void report_num_records_request_execute(nrf_ble_cgms_t   * p_cgms,
 // 目前保留，回调事件处理逻辑 增加cb
 void cgms_racp_on_meas_tx_complete(struct bt_conn *conn, void *user_data)
 {
-	// ARG_UNUSED(conn);
-	// ARG_UNUSED(user_data);
+    ARG_UNUSED(conn);
+    nrf_ble_cgms_t * p_cgms = (nrf_ble_cgms_t *)user_data;
 
-	// if (!m_racp.processing_active) {
-	// 	return;
-	// }
-
-	// m_racp.proc_records_reported++;
-
-	// if (m_racp.proc_record_ndx >= m_racp.proc_records_ndx_last_to_send) {
-	// 	m_racp.processing_active = false;
-	// 	cgms_send_racp_response_code(RACP_OPCODE_REPORT_RECS,
-	// 		(m_racp.proc_records_reported > 0U) ? RACP_RESPONSE_SUCCESS : RACP_RESPONSE_NO_RECORDS_FOUND);
-	// 	return;
-	// }
-
-	// m_racp.proc_record_ndx++;
-	// if (cgms_measurement_notify_with_cb(&m_records[m_racp.proc_record_ndx],
-	// 	cgms_racp_on_meas_tx_complete,
-	// 	NULL) != 0) {
-	// 	m_racp.processing_active = false;
-	// 	cgms_send_racp_response_code(RACP_OPCODE_REPORT_RECS, RACP_RESPONSE_PROCEDURE_NOT_DONE);
-	// }
+    if ((p_cgms != NULL) && p_cgms->racp_data.racp_procesing_active)
+    {
+        racp_report_records_procedure(p_cgms);
+    }
 }
-
-// ssize_t cgms_write_racp(struct bt_conn *conn, const struct bt_gatt_attr *attr,
-// 	const void *buf, uint16_t len, uint16_t offset, uint8_t flags, nrf_ble_cgms_t * p_cgms)
-// {
-// 	// ble_racp_value_t req;
-// 	uint8_t response_code;
-// 	uint16_t count;
-
-// 	ARG_UNUSED(conn);
-// 	ARG_UNUSED(attr);
-// 	ARG_UNUSED(flags);
-
-// 	if (offset != 0U) {
-// 		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
-// 	}
-
-// 	// 如果没有使能indication，直接返回错误
-// 	if (!m_racp_ind_enabled) {
-// 		return BT_GATT_ERR(BT_ATT_ERR_CCC_IMPROPER_CONF);
-// 	}
-
-// 	// cgms_racp_decode((const uint8_t *)buf, len, &req);
-// 	ble_racp_decode(len, (const uint8_t *)buf, &p_cgms->racp_data.racp_request);
-// 	if (!is_request_to_be_executed(p_cgms, &p_cgms->racp_data.racp_request, &response_code)) {
-// 		if (response_code == RACP_RESPONSE_SUCCESS) {
-// 			cgms_racp_reset_state();
-// 		}
-// 		if (response_code != RACP_RESPONSE_RESERVED) {
-// 			m_racp.processing_active = false;
-// 			cgms_send_racp_response_code(p_cgms, p_cgms->racp_data.racp_request.opcode, response_code);
-// 		}
-// 		return len;
-// 	}
-
-// 	if (p_cgms->racp_data.racp_request.opcode == RACP_OPCODE_REPORT_NUM_RECS) {
-// 		cgms_send_racp_num_records(cgms_count_matching_records(&p_cgms->racp_data.racp_request));
-// 		return len;
-// 	}
-// 	if (p_cgms->racp_data.racp_request.opcode == RACP_OPCODE_REPORT_RECS) {
-// 		if (cgms_report_records(&p_cgms->racp_data.racp_request, &count) != 0) {
-// 			cgms_send_racp_response_code(p_cgms, RACP_OPCODE_REPORT_RECS, RACP_RESPONSE_PROCEDURE_NOT_DONE);
-// 			return len;
-// 		}
-// 		if (count == 0U) {
-// 			cgms_send_racp_response_code(p_cgms, RACP_OPCODE_REPORT_RECS, RACP_RESPONSE_NO_RECORDS_FOUND);
-// 		}
-// 	}
-
-// 	return len;
-// }
 
 ssize_t cgms_write_racp(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 	const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
 {
+    LOG_DBG("Received RACP write request (len %d, offset %d, flags 0x%02x)\n", len, offset, flags);
 	// ble_racp_value_t req;
 	nrf_ble_cgms_t * p_cgms;
 	uint8_t response_code;
@@ -643,18 +704,19 @@ ssize_t cgms_write_racp(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 	if (offset != 0U) {
 		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
 	}
-	// auth reply 适配
 
+    // !!! 有bug
 	// 如果没有使能indication，直接返回错误
 	if (!m_racp_ind_enabled) {
+        LOG_ERR("RACP indication not enabled, rejecting request\n");
 		return BT_GATT_ERR(BT_ATT_ERR_CCC_IMPROPER_CONF);
 	}
 
-	// cgms_racp_decode((const uint8_t *)buf, len, &req);
+    // 解码请求
 	ble_racp_decode(len, (const uint8_t *)buf, &p_cgms->racp_data.racp_request);
+
 	if (is_request_to_be_executed(p_cgms, &p_cgms->racp_data.racp_request, &response_code)) {
-		// auth reply 适配、
-		// Execute request
+		// 执行请求
         if (p_cgms->racp_data.racp_request.opcode == RACP_OPCODE_REPORT_RECS)
         {
             report_records_request_execute(p_cgms, &p_cgms->racp_data.racp_request);
