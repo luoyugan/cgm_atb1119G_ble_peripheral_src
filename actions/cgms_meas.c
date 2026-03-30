@@ -119,7 +119,7 @@ int cgms_measurement_notify_with_cb(const ble_cgms_rec_t *p_rec, uint8_t * p_cou
 
 	memset(&m_meas_notify_params, 0, sizeof(m_meas_notify_params));
 
-	//m_meas_notify_params.attr = &attr_cgms_svc[CGMS_ATTR_MEAS_VAL];
+	m_meas_notify_params.attr = &attr_cgms_svc[CGMS_ATTR_MEAS_VAL];
 	m_meas_notify_params.data = encoded_meas;
 	m_meas_notify_params.len = hvx_len;
 	m_meas_notify_params.func = func;

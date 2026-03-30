@@ -37,6 +37,88 @@ static database_entry_t m_database[CGMS_DB_MAX_RECORDS];
 static uint8_t          m_database_crossref[CGMS_DB_MAX_RECORDS];
 static uint16_t         m_num_records;
 
+static void cgms_db_dump_records(const char *tag)
+{
+    uint16_t i;
+    ble_cgms_rec_t rec;
+
+    printk("CGMS DB DUMP [%s]: total=%u\n", tag, m_num_records);
+
+    for (i = 0; i < m_num_records; i++)
+    {
+        rec = m_database[m_database_crossref[i]].record;
+        printk("  idx=%u, offset=%u, glucose=%u, flags=0x%02x\n",
+               i,
+               rec.meas.time_offset,
+               rec.meas.glucose_concentration,
+               rec.meas.flags);
+    }
+}
+
+/**@brief Initialize database with mock glucose records for debugging. */
+static void cgms_db_init_mock_data(void)
+{
+#if CGMS_DB_ENABLE_MOCK_DATA
+    ble_cgms_rec_t rec;
+    int i;
+    int32_t add_err;
+    uint16_t time_offset = 0;
+    uint16_t glucose_val = 150;  // Start with 150 mg/dL
+
+    // Add 10 mock glucose records with varying values
+    for (i = 0; i < 10; i++)
+    {
+        memset(&rec, 0, sizeof(rec));
+
+        // Flags: indicate status annunciation is present
+        rec.meas.flags = NRF_BLE_CGMS_STATUS_FLAGS_STATUS_OCT_PRESENT;
+
+        // Glucose concentration (in mg/dL)
+        // Simulate varying glucose values
+        if (i % 3 == 0) {
+            glucose_val += GL_CONCENTRATION_INC;     // Increase glucose
+        } else {
+            glucose_val -= GL_CONCENTRATION_DEC;     // Decrease glucose
+        }
+
+        // Clamp values within valid range
+        if (glucose_val > MAX_GLUCOSE_CONCENTRATION) {
+            glucose_val = MAX_GLUCOSE_CONCENTRATION;
+        }
+        if (glucose_val < MIN_GLUCOSE_CONCENTRATION) {
+            glucose_val = MIN_GLUCOSE_CONCENTRATION;
+        }
+
+        rec.meas.glucose_concentration = glucose_val;
+
+        // Time offset: increment by approximately every 5 minutes (in seconds)
+        time_offset += 300;  // 5 minutes per record
+        rec.meas.time_offset = time_offset;
+
+        // Sensor status annunciation
+        rec.meas.sensor_status_annunciation.warning = 0;
+        rec.meas.sensor_status_annunciation.calib_temp = 0;
+        rec.meas.sensor_status_annunciation.status = 0;  // No warnings
+
+        // Optional trend and quality (not used in basic setup)
+        rec.meas.trend = 0;
+        rec.meas.quality = 0;
+
+        // Add record to database
+        add_err = cgms_db_record_add(&rec);
+        printk("CGMS DB MOCK: add[%d] err=%d, offset=%u, glucose=%u, flags=0x%02x\n",
+               i,
+               add_err,
+               rec.meas.time_offset,
+               rec.meas.glucose_concentration,
+               rec.meas.flags);
+    }
+
+    cgms_db_dump_records("mock_init");
+#endif
+}
+
+
 int32_t cgms_db_init(void)
 {
     int i;
@@ -48,6 +130,7 @@ int32_t cgms_db_init(void)
     }
 
     m_num_records = 0;
+    cgms_db_init_mock_data();
 
     return 0;
 }

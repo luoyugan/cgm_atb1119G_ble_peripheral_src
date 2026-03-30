@@ -274,6 +274,7 @@ void bt_le_op_init(void)
 	
 	memset(&cgms_init, 0, sizeof(cgms_init));
 
+	err_code = ble_cgms_init(&cgms_init, &cgms_init);
 	// err_code = nrf_ble_cgms_init(&m_cgms, &cgms_init);
 
 
