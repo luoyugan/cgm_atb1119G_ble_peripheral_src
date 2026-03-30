@@ -393,6 +393,8 @@ static void racp_report_records_procedure(nrf_ble_cgms_t * p_cgms)
                 {
                     racp_report_records_completed(p_cgms);
                 }
+                // 延时1s
+                k_sleep(K_SECONDS(1));
                 break;
 
             // case NRF_ERROR_RESOURCES:
@@ -684,10 +686,10 @@ void cgms_racp_on_meas_tx_complete(struct bt_conn *conn, void *user_data)
     ARG_UNUSED(conn);
     nrf_ble_cgms_t * p_cgms = (nrf_ble_cgms_t *)user_data;
 
-    if ((p_cgms != NULL) && p_cgms->racp_data.racp_procesing_active)
-    {
-        racp_report_records_procedure(p_cgms);
-    }
+    // if ((p_cgms != NULL) && p_cgms->racp_data.racp_procesing_active)
+    // {
+    //     racp_report_records_procedure(p_cgms);
+    // }
 }
 
 ssize_t cgms_write_racp(struct bt_conn *conn, const struct bt_gatt_attr *attr,
