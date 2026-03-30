@@ -12,6 +12,8 @@ LOG_MODULE_REGISTER(cgms_racp, LOG_LEVEL_DBG);
 #define CGMS_ACTIONS_LOG_READY 1
 #endif
 
+static nrf_ble_cgms_t m_cgms_srv = {0};
+
 uint8_t ble_racp_encode(const ble_racp_value_t * p_racp_val, uint8_t * p_data)
 {
     uint8_t len = 0;
@@ -693,7 +695,7 @@ ssize_t cgms_write_racp(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 {
     LOG_DBG("Received RACP write request (len %d, offset %d, flags 0x%02x)\n", len, offset, flags);
 	// ble_racp_value_t req;
-	nrf_ble_cgms_t * p_cgms;
+	nrf_ble_cgms_t * p_cgms = &m_cgms_srv;
 	uint8_t response_code;
 	// uint16_t count;
 
