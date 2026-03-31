@@ -227,7 +227,7 @@ uint32_t nrf_ble_cgms_update_status(const nrf_ble_cgm_status_t * p_status)
 	if (len != 5U) {
 		return EINVAL;
 	}
-
+	// sd_ble_gatts_value_set nordic使用该接口 后续还需要适配
 	m_status = *p_status;
 	return 0;
 }

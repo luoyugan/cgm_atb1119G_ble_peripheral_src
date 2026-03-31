@@ -144,6 +144,7 @@ void cgms_cancel_glucose_work(void)
 
 void cgms_start_session(void)
 {
+	printk("CGMS Start Session -1 \n");
 	m_session_started = true;
 	m_nb_run_session++;
 	m_status.time_offset = 0U;
@@ -157,14 +158,27 @@ void cgms_start_session(void)
 
 void cgms_stop_session(void)
 {
+	printk("CGMS Stop Session -1 \n");
 	m_session_started = false;
 	m_status.status.status |= NRF_BLE_CGMS_STATUS_SESSION_STOPPED;
 	cgms_cancel_glucose_work();
 	// cgms_emit_event(BLE_CGMS_EVT_STOP_SESSION);
 }
 
+static void cgms_update_status(void)
+{
+	int32_t err_code;
+	m_status.time_offset = m_current_offset;
+	err_code = nrf_ble_cgms_update_status(&m_status.status);
+	if (err_code != 0)
+	{
+		printk("Failed to update CGMS status (err %d)\n", err_code);
+	}
+}
+
 void cgms_meas_work_handler(struct k_work *work)
 {
+	printk("CGMS Measurement work handler called\n");
 	ble_cgms_rec_t rec;
 	int32_t err_code = 0;
 	uint8_t rec_count = 1U;
@@ -190,10 +204,15 @@ void cgms_meas_work_handler(struct k_work *work)
     rec.meas.time_offset                           = m_current_offset;
 
 	err_code = cgms_db_record_add(&rec);
+	printk("CGMS MEAS WORK: add record err=%d, offset=%u, glucose=%u\n",
+	       err_code,
+	       rec.meas.time_offset,
+	       rec.meas.glucose_concentration);
 	if (err_code < 0) {
 		// 记录添加失败，可能是数据库已满。此处仅打印错误日志，实际应用中可根据需求进行处理。
 		printk("Failed to add CGMS record to database (err: %d)\n", err_code);
 	}
 	(void)cgms_measurement_notify(&rec, &rec_count);
+	cgms_update_status();
 	cgms_schedule_glucose_work();
 }
