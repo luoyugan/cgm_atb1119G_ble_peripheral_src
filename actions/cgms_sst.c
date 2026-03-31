@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
+#include <sys/timeutil.h>
 
 #include "cgms_sst.h"
 #include "cgms_db.h"
@@ -55,8 +56,7 @@ static void convert_ble_time_c_time(const ble_cgms_sst_t *p_sst, struct tm *p_c_
     p_c_time_date->tm_min = p_sst->date_time.minutes;
     p_c_time_date->tm_hour = p_sst->date_time.hours;
     p_c_time_date->tm_mday = p_sst->date_time.day;
-    p_c_time_date->tm_mon  = p_sst->date_time.month;
-    // p_c_time_date->tm_mon = (p_sst->date_time.month > 0U) ? ((int)p_sst->date_time.month - 1) : 0;
+    p_c_time_date->tm_mon = (p_sst->date_time.month > 0U) ? ((int)p_sst->date_time.month - 1) : 0;
     p_c_time_date->tm_year = (int)p_sst->date_time.year - 1900;
 
     // Ignore daylight saving for this conversion.
@@ -66,18 +66,18 @@ static void convert_ble_time_c_time(const ble_cgms_sst_t *p_sst, struct tm *p_c_
 static void calc_sst(uint16_t offset, struct tm *p_c_time_date)
 {
     time_t c_time_in_sec;
-    struct tm *local_time;
 
-    // 编译报错，后续需要适配
-    // c_time_in_sec = mktime(p_c_time_date);
+    c_time_in_sec = timeutil_timegm(p_c_time_date);
     c_time_in_sec -= ((time_t)offset * 60);
-    // local_time = localtime(&c_time_in_sec);
-    if (local_time == NULL) {
+
+    // gmtime_r is thread-safe and stores the result in p_c_time_date
+    if (gmtime_r(&c_time_in_sec, p_c_time_date) == NULL) {
+        // Error handling: if conversion fails, do not proceed.
         return;
     }
 
-    *p_c_time_date = *local_time;
     if (p_c_time_date->tm_isdst == 1) {
+        // Daylight saving time is not used and must be removed.
         p_c_time_date->tm_hour -= 1;
         p_c_time_date->tm_isdst = 0;
     }
@@ -89,7 +89,7 @@ static void convert_c_time_ble_time(ble_cgms_sst_t *p_sst, const struct tm *p_c_
     p_sst->date_time.minutes = p_c_time_date->tm_min;
     p_sst->date_time.hours   = p_c_time_date->tm_hour;
     p_sst->date_time.day     = p_c_time_date->tm_mday;
-    p_sst->date_time.month   = p_c_time_date->tm_mon;
+    p_sst->date_time.month   = p_c_time_date->tm_mon + 1;
     p_sst->date_time.year    = p_c_time_date->tm_year + 1900;
 }
 
@@ -108,6 +108,7 @@ static uint8_t sst_encode(const ble_cgms_sst_t *p_sst, uint8_t *p_encoded_sst)
 // 基于本地时间计算 SST
 static int cgm_update_sst(const uint8_t *p_data, uint16_t len)
 {
+    printk("Update SST\n");
     ble_cgms_sst_t sst;
     struct tm c_time_and_date;
 
@@ -184,13 +185,18 @@ ssize_t cgms_write_sst(struct bt_conn *conn, const struct bt_gatt_attr *attr,
     ARG_UNUSED(conn);
     ARG_UNUSED(attr);
     ARG_UNUSED(flags);
-
+    printk("buf len: %u\n", len);
     if (offset != 0U) {
         return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
     }
     if (len != NRF_BLE_CGMS_SST_LEN) {
         return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
     }
+    printk("Received SST write request: %02X %02X %02X %02X %02X %02X %02X %02X %02X\n",
+           ((uint8_t *)buf)[0], ((uint8_t *)buf)[1], ((uint8_t *)buf)[2], ((uint8_t *)buf)[3],
+           ((uint8_t *)buf)[4], ((uint8_t *)buf)[5], ((uint8_t *)buf)[6], ((uint8_t *)buf)[7],
+           ((uint8_t *)buf)[8]);
+    // 会话已开始时不允许写 SST
     if (m_session_started) {
         return BT_GATT_ERR(BT_ATT_ERR_WRITE_NOT_PERMITTED);
     }
