@@ -66,7 +66,7 @@ static void cgms_db_init_mock_data(void)
     uint16_t glucose_val = 150;  // Start with 150 mg/dL
 
     // Add 10 mock glucose records with varying values
-    for (i = 0; i < 10; i++)
+    for (i = 0; i < 1000; i++)
     {
         memset(&rec, 0, sizeof(rec));
 

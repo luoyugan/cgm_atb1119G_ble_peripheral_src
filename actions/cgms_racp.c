@@ -13,6 +13,49 @@ LOG_MODULE_REGISTER(cgms_racp, LOG_LEVEL_DBG);
 #endif
 
 static nrf_ble_cgms_t m_cgms_srv = {0};
+static struct k_delayed_work m_racp_proc_work;
+static nrf_ble_cgms_t *m_racp_proc_cgms;
+static bool m_racp_proc_work_inited;
+
+static void racp_report_records_procedure(nrf_ble_cgms_t * p_cgms);
+
+static bool racp_tx_resource_unavailable(int32_t err_code)
+{
+    if ((err_code == -ENOMEM) || (err_code == -EAGAIN)) {
+        return true;
+    }
+#ifdef ENOBUFS
+    if (err_code == -ENOBUFS) {
+        return true;
+    }
+#endif
+    if (err_code == -55) {
+        return true;
+    }
+    return false;
+}
+
+static void cgms_racp_proc_work_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+
+    if ((m_racp_proc_cgms == NULL) || !m_racp_proc_cgms->racp_data.racp_procesing_active) {
+        return;
+    }
+
+    racp_report_records_procedure(m_racp_proc_cgms);
+}
+
+static void cgms_racp_schedule_continue(nrf_ble_cgms_t *p_cgms, k_timeout_t delay)
+{
+    if (!m_racp_proc_work_inited) {
+        k_delayed_work_init(&m_racp_proc_work, cgms_racp_proc_work_handler);
+        m_racp_proc_work_inited = true;
+    }
+
+    m_racp_proc_cgms = p_cgms;
+    k_delayed_work_submit(&m_racp_proc_work, delay);
+}
 
 uint8_t ble_racp_encode(const ble_racp_value_t * p_racp_val, uint8_t * p_data)
 {
@@ -92,14 +135,16 @@ static int cgms_racp_indicate(nrf_ble_cgms_t * p_cgms, ble_racp_value_t * p_racp
 		return -ENOTCONN;
 	}
 
-	uint8_t          encoded_resp[25];
     uint16_t         len;
 
-	len = ble_racp_encode(p_racp_val, encoded_resp);
+    len = ble_racp_encode(p_racp_val, m_racp_ind_buf);
+    if (len > sizeof(m_racp_ind_buf)) {
+        return -EINVAL;
+    }
 
 	memset(&m_racp_ind_params, 0, sizeof(m_racp_ind_params));
 	m_racp_ind_params.attr = &attr_cgms_svc[CGMS_ATTR_RACP_VAL];
-	m_racp_ind_params.data = encoded_resp;
+    m_racp_ind_params.data = m_racp_ind_buf;
 	m_racp_ind_params.len = len;
 	m_racp_ind_params.func = cgms_racp_ind_cb; //nordic用的是p_cgms->gatt_err_handler
 	return bt_gatt_indicate(m_conn, &m_racp_ind_params);
@@ -125,7 +170,7 @@ static void cgms_send_racp_response_code(nrf_ble_cgms_t * p_cgms,uint8_t req_opc
  *
  * @return      NRF_SUCCESS on success, otherwise an error code.
  */
-static uint32_t racp_report_records_all(nrf_ble_cgms_t * p_cgms)
+static int32_t racp_report_records_all(nrf_ble_cgms_t * p_cgms)
 {
 	uint16_t total_records = cgms_db_num_records_get();
     uint16_t cur_nb_rec;
@@ -138,7 +183,7 @@ static uint32_t racp_report_records_all(nrf_ble_cgms_t * p_cgms)
     }
     else
     {
-        uint32_t       err_code;
+        int32_t        err_code;
         ble_cgms_rec_t rec[NRF_BLE_CGMS_MEAS_REC_PER_NOTIF_MAX];
 
         cur_nb_rec = total_records - p_cgms->racp_data.racp_proc_record_ndx;
@@ -157,7 +202,7 @@ static uint32_t racp_report_records_all(nrf_ble_cgms_t * p_cgms)
             }
         }
         err_code = cgms_racp_send_meas_with_cb(p_cgms, rec, &nb_rec_to_send);
-        
+        LOG_DBG("RACP report records all: sent %u records, err %u", nb_rec_to_send, err_code);
         if (err_code != 0)
         {
             return err_code;
@@ -174,9 +219,9 @@ static uint32_t racp_report_records_all(nrf_ble_cgms_t * p_cgms)
  *
  * @return      NRF_SUCCESS on success, otherwise an error code.
  */
-static uint32_t racp_report_records_first_last(nrf_ble_cgms_t * p_cgms)
+static int32_t racp_report_records_first_last(nrf_ble_cgms_t * p_cgms)
 {
-	uint32_t       err_code;
+    int32_t        err_code;
     ble_cgms_rec_t rec;
     uint16_t       total_records;
     uint8_t        nb_rec_to_send = 1;
@@ -223,7 +268,7 @@ static uint32_t racp_report_records_first_last(nrf_ble_cgms_t * p_cgms)
  *
  * @return      NRF_SUCCESS on success, otherwise an error code.
  */
-static uint32_t racp_report_records_less_equal(nrf_ble_cgms_t * p_cgms)
+static int32_t racp_report_records_less_equal(nrf_ble_cgms_t * p_cgms)
 {
     uint16_t total_rec_nb_to_send;
     uint16_t rec_nb_left_to_send;
@@ -277,7 +322,7 @@ static uint32_t racp_report_records_less_equal(nrf_ble_cgms_t * p_cgms)
  *
  * @return      NRF_SUCCESS on success, otherwise an error code.
  */
-static uint32_t racp_report_records_greater_equal(nrf_ble_cgms_t * p_cgms)
+static int32_t racp_report_records_greater_equal(nrf_ble_cgms_t * p_cgms)
 {
     int32_t err_code;
     uint16_t   total_rec_nb = cgms_db_num_records_get();
@@ -350,74 +395,54 @@ static void racp_report_records_completed(nrf_ble_cgms_t * p_cgms)
  */
 static void racp_report_records_procedure(nrf_ble_cgms_t * p_cgms)
 {
-	 uint32_t err_code;
+    int32_t err_code;
 
-    while (p_cgms->racp_data.racp_procesing_active)
+	if (!p_cgms->racp_data.racp_procesing_active)
+	{
+		return;
+	}
+
+	// Execute requested procedure (single step, continue from TX callback)
+	switch (p_cgms->racp_data.racp_proc_operator)
+	{
+		case RACP_OPERATOR_ALL:
+			err_code = racp_report_records_all(p_cgms);
+			break;
+
+		case RACP_OPERATOR_FIRST:
+			// Fall through.
+		case RACP_OPERATOR_LAST:
+			err_code = racp_report_records_first_last(p_cgms);
+			break;
+		case RACP_OPERATOR_GREATER_OR_EQUAL:
+			err_code = racp_report_records_greater_equal(p_cgms);
+			break;
+		case RACP_OPERATOR_LESS_OR_EQUAL:
+			err_code = racp_report_records_less_equal(p_cgms);
+			break;
+		default:
+			p_cgms->racp_data.racp_procesing_active = false;
+			return;
+	}
+
+	if (err_code == 0)
+	{
+		if (!p_cgms->racp_data.racp_procesing_active)
+		{
+			racp_report_records_completed(p_cgms);
+		}
+		return;
+	}
+
+    // 判断是否资源忙碌，如果是，则稍后继续处理
+    if (racp_tx_resource_unavailable(err_code))
     {
-        // Execute requested procedure
-        switch (p_cgms->racp_data.racp_proc_operator)
-        {
-            case RACP_OPERATOR_ALL:
-                err_code = racp_report_records_all(p_cgms);
-                break;
-
-            case RACP_OPERATOR_FIRST:
-                // Fall through.
-            case RACP_OPERATOR_LAST:
-                err_code = racp_report_records_first_last(p_cgms);
-                break;
-            case RACP_OPERATOR_GREATER_OR_EQUAL:
-                err_code = racp_report_records_greater_equal(p_cgms);
-                break;
-            case RACP_OPERATOR_LESS_OR_EQUAL:
-                err_code = racp_report_records_less_equal(p_cgms);
-                break;
-            default:
-                // // Report error to application
-                // if (p_cgms->error_handler != NULL)
-                // {
-                //     p_cgms->error_handler(NRF_ERROR_INTERNAL);
-                // }
-
-                p_cgms->racp_data.racp_procesing_active = false;
-
-                return;
-        }
-
-        // Error handling
-        switch (err_code)
-        {
-            // case NRF_SUCCESS:
-			case 0:
-                if (!p_cgms->racp_data.racp_procesing_active)
-                {
-                    racp_report_records_completed(p_cgms);
-                }
-                // 延时1s
-                k_sleep(K_SECONDS(1));
-                break;
-
-            // case NRF_ERROR_RESOURCES:
-            //     // Wait for TX_COMPLETE event to resume transmission.
-            //     return;
-
-            // case NRF_ERROR_INVALID_STATE:
-            //     // Notification is probably not enabled. Ignore request.
-            //     p_cgms->racp_data.racp_procesing_active = false;;
-            //     return;
-
-            default:
-                // Report error to application.
-                // if (p_cgms->error_handler != NULL)
-                // {
-                //     p_cgms->error_handler(err_code);
-                // }
-
-                // Make sure state machine returns to the default state.
-                p_cgms->racp_data.racp_procesing_active = false;
-                return;
-        }
+        cgms_racp_schedule_continue(p_cgms, K_MSEC(20));
+        return;
     }
+
+	// Make sure state machine returns to the default state.
+	p_cgms->racp_data.racp_procesing_active = false;
 }
 
 /**@brief Function for testing if the received request is to be executed.
@@ -621,7 +646,7 @@ static void report_records_request_execute(nrf_ble_cgms_t   * p_cgms,
             racp_report_records_completed(p_cgms);
         }
     }
-    racp_report_records_procedure(p_cgms);
+    cgms_racp_schedule_continue(p_cgms, K_NO_WAIT);
 }
 
 /**@brief Function for processing a REPORT NUM RECORDS request.
@@ -638,7 +663,7 @@ static void report_num_records_request_execute(nrf_ble_cgms_t   * p_cgms,
 
     total_records = cgms_db_num_records_get();
     num_records   = 0;
-
+    LOG_DBG("Total records in database: %u", total_records);
     if (p_racp_request->operator == RACP_OPERATOR_ALL)
     {
         num_records = total_records;
@@ -686,10 +711,10 @@ void cgms_racp_on_meas_tx_complete(struct bt_conn *conn, void *user_data)
     ARG_UNUSED(conn);
     nrf_ble_cgms_t * p_cgms = (nrf_ble_cgms_t *)user_data;
 
-    // if ((p_cgms != NULL) && p_cgms->racp_data.racp_procesing_active)
-    // {
-    //     racp_report_records_procedure(p_cgms);
-    // }
+    if ((p_cgms != NULL) && p_cgms->racp_data.racp_procesing_active)
+    {
+        cgms_racp_schedule_continue(p_cgms, K_NO_WAIT);
+    }
 }
 
 ssize_t cgms_write_racp(struct bt_conn *conn, const struct bt_gatt_attr *attr,
@@ -709,7 +734,6 @@ ssize_t cgms_write_racp(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
 	}
 
-    // !!! 有bug
 	// 如果没有使能indication，直接返回错误
 	if (!m_racp_ind_enabled) {
         LOG_ERR("RACP indication not enabled, rejecting request\n");

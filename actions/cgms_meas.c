@@ -5,7 +5,7 @@
 #include "cgms_db.h"
 
 static struct bt_gatt_notify_params m_meas_notify_params;
-static uint8_t m_meas_notify_buf[16];
+static uint8_t m_meas_notify_buf[NRF_BLE_CGMS_MEAS_LEN_MAX + NRF_BLE_CGMS_MEAS_REC_LEN_MAX];
 
 static uint8_t cgms_meas_encode(const nrf_ble_cgms_meas_t * p_meas,
                                 uint8_t                   * p_encoded_buffer)
@@ -85,12 +85,10 @@ int cgms_measurement_notify_with_cb(const ble_cgms_rec_t *p_rec, uint8_t * p_cou
 	bt_gatt_complete_func_t func,
 	void *user_data)
 {
-	uint8_t                encoded_meas[NRF_BLE_CGMS_MEAS_LEN_MAX + NRF_BLE_CGMS_MEAS_REC_LEN_MAX];
 	uint16_t               len     = 0;
 	uint16_t               hvx_len = NRF_BLE_CGMS_MEAS_LEN_MAX;
 	uint8_t                local_count = 1U;
 	int                    i;
-	struct bt_gatt_notify_params m_meas_notify_params;
 
 	// notify 之前先检查连接和通知使能状态
 	if ((p_rec == NULL) || (m_conn == NULL) || !m_meas_notify_enabled) {
@@ -107,7 +105,7 @@ int cgms_measurement_notify_with_cb(const ble_cgms_rec_t *p_rec, uint8_t * p_cou
 
 	for (i = 0; i < *p_count; i++)
 	{
-		uint8_t meas_len = cgms_meas_encode(&(p_rec[i].meas), (encoded_meas + len));
+		uint8_t meas_len = cgms_meas_encode(&(p_rec[i].meas), (m_meas_notify_buf + len));
 		if (len + meas_len >= NRF_BLE_CGMS_MEAS_LEN_MAX)
         {
             break;
@@ -120,7 +118,7 @@ int cgms_measurement_notify_with_cb(const ble_cgms_rec_t *p_rec, uint8_t * p_cou
 	memset(&m_meas_notify_params, 0, sizeof(m_meas_notify_params));
 
 	m_meas_notify_params.attr = &attr_cgms_svc[CGMS_ATTR_MEAS_VAL];
-	m_meas_notify_params.data = encoded_meas;
+	m_meas_notify_params.data = m_meas_notify_buf;
 	m_meas_notify_params.len = hvx_len;
 	m_meas_notify_params.func = func;
 	m_meas_notify_params.user_data = user_data;
