@@ -380,6 +380,7 @@ extern struct cgms_feature_value m_feature;
 extern nrf_ble_cgm_status_t m_status;
 extern ble_cgms_sst_t m_sst;
 extern uint16_t m_session_run_time;
+extern int64_t m_session_start_uptime;
 extern uint8_t m_comm_interval;
 extern bool m_session_started;
 extern uint8_t m_nb_run_session;

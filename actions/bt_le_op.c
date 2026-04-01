@@ -24,6 +24,7 @@
 #include "soc_clock.h"
 #include "soc_pm.h"
 #include "atb_ble_cgms.h"
+#include "atb_ble_std_services.h"
 
 #define DEVICE_NAME "CGMS_Demo"
 //#define DEVICE_NAME			CONFIG_BT_DEVICE_NAME
@@ -275,7 +276,7 @@ void bt_le_op_init(void)
 	memset(&cgms_init, 0, sizeof(cgms_init));
 
 	err_code = ble_cgms_init(&cgms_init, &cgms_init);
-	// err_code = nrf_ble_cgms_init(&m_cgms, &cgms_init);
+	// err_code = nrf_ble_cgms_init// (&m_cgms, &cgms_init);
 
 
 	ble_cgms_register_evt_handler(ble_cgms_evt_handle);

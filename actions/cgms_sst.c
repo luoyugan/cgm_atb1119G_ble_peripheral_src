@@ -141,7 +141,7 @@ int cgms_sst_set(const ble_cgms_sst_t *p_sst)
     return 0;
 }
 
-#if 1
+// 读feature的接口
 ssize_t cgms_read_feature(struct bt_conn *conn, const struct bt_gatt_attr *attr,
     void *buf, uint16_t len, uint16_t offset)
 {
@@ -151,6 +151,7 @@ ssize_t cgms_read_feature(struct bt_conn *conn, const struct bt_gatt_attr *attr,
     return bt_gatt_attr_read(conn, attr, buf, len, offset, value, value_len);
 }
 
+// 读status的接口
 ssize_t cgms_read_status(struct bt_conn *conn, const struct bt_gatt_attr *attr,
     void *buf, uint16_t len, uint16_t offset)
 {
@@ -160,6 +161,7 @@ ssize_t cgms_read_status(struct bt_conn *conn, const struct bt_gatt_attr *attr,
     return bt_gatt_attr_read(conn, attr, buf, len, offset, value, value_len);
 }
 
+// 读开始时间的接口
 ssize_t cgms_read_sst(struct bt_conn *conn, const struct bt_gatt_attr *attr,
     void *buf, uint16_t len, uint16_t offset)
 {
@@ -169,15 +171,20 @@ ssize_t cgms_read_sst(struct bt_conn *conn, const struct bt_gatt_attr *attr,
     return bt_gatt_attr_read(conn, attr, buf, len, offset, value, value_len);
 }
 
+// 读运行时间的接口
 ssize_t cgms_read_srt(struct bt_conn *conn, const struct bt_gatt_attr *attr,
     void *buf, uint16_t len, uint16_t offset)
 {
     uint8_t value[2];
 
+    // SRT = Current Time - SST
+    // 根据规范和已有逻辑，m_current_offset 记录了自 Session 开始以来的分钟数
+    // 它是基于 SST 基准时间并在测量定时器中更新的
+    m_session_run_time = m_current_offset;
+
     put_le16(value, m_session_run_time);
     return bt_gatt_attr_read(conn, attr, buf, len, offset, value, sizeof(value));
 }
-#endif
 
 ssize_t cgms_write_sst(struct bt_conn *conn, const struct bt_gatt_attr *attr,
     const void *buf, uint16_t len, uint16_t offset, uint8_t flags)

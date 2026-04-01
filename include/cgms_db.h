@@ -7,7 +7,7 @@
 #include "atb_ble_cgms.h"
 
 #define CGMS_DB_MAX_RECORDS 100
-#define CGMS_DB_ENABLE_MOCK_DATA 1
+#define CGMS_DB_ENABLE_MOCK_DATA 0
 
 
 uint8_t cgms_encode_feature(uint8_t *buf);

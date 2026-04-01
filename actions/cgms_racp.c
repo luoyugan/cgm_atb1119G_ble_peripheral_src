@@ -709,7 +709,6 @@ ssize_t cgms_write_racp(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
 	}
 
-    // !!! 有bug
 	// 如果没有使能indication，直接返回错误
 	if (!m_racp_ind_enabled) {
         LOG_ERR("RACP indication not enabled, rejecting request\n");
